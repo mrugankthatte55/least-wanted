@@ -10,6 +10,7 @@ export interface MapMarkers {
   cops: Cop[];
   rival?: Car;
   checkpoint?: { x: number; z: number };
+  route?: { x: number; z: number }[]; // remaining checkpoints, next one first
 }
 
 export class HUD {
@@ -69,9 +70,25 @@ export class HUD {
     const k = W / view;
     const tx = (x: number) => (x - p.x) * k + W / 2;
     const tz = (z: number) => (z - p.z) * k + W / 2;
+    if (m.route && m.route.length) {
+      // remaining route as a line from the player through every checkpoint left
+      ctx.strokeStyle = accent; ctx.lineWidth = 2; ctx.globalAlpha = 0.55;
+      ctx.beginPath(); ctx.moveTo(W / 2, W / 2);
+      for (const c of m.route) ctx.lineTo(tx(c.x), tz(c.z));
+      ctx.stroke();
+      ctx.globalAlpha = 1;
+      ctx.fillStyle = accent;
+      for (let i = 1; i < m.route.length; i++) {
+        const c = m.route[i];
+        ctx.beginPath(); ctx.arc(tx(c.x), tz(c.z), i === 1 ? 4 : 2.5, 0, Math.PI * 2); ctx.fill();
+      }
+      const last = m.route[m.route.length - 1];
+      ctx.fillStyle = "#fff";
+      ctx.beginPath(); ctx.arc(tx(last.x), tz(last.z), 3, 0, Math.PI * 2); ctx.fill();
+    }
     if (m.checkpoint) {
-      ctx.strokeStyle = accent; ctx.lineWidth = 2;
-      ctx.beginPath(); ctx.arc(tx(m.checkpoint.x), tz(m.checkpoint.z), 6, 0, Math.PI * 2); ctx.stroke();
+      ctx.strokeStyle = accent; ctx.lineWidth = 3;
+      ctx.beginPath(); ctx.arc(tx(m.checkpoint.x), tz(m.checkpoint.z), 7, 0, Math.PI * 2); ctx.stroke();
       // direction hint at the edge if off-screen
       const dx = m.checkpoint.x - p.x, dz = m.checkpoint.z - p.z;
       if (Math.abs(dx) > view / 2 || Math.abs(dz) > view / 2) {

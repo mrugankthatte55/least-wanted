@@ -15,6 +15,19 @@ export const RIVALS: Rival[] = [
 
 export type RaceState = "countdown" | "running" | "finished";
 
+/** A glowing 3D arrow lying horizontally, pointing along the group's local -z (the car heading convention). */
+function buildArrow(color: number, headR: number, headLen: number, shaftLen: number, shaftR: number, opacity: number) {
+  const mat = new THREE.MeshBasicMaterial({ color, transparent: true, opacity, depthWrite: false });
+  const g = new THREE.Group();
+  const head = new THREE.Mesh(new THREE.ConeGeometry(headR, headLen, 4), mat);
+  head.rotation.x = -Math.PI / 2;
+  head.rotation.z = Math.PI / 4; // pyramid head reads as an arrow from every side
+  head.position.z = -(shaftLen / 2 + headLen / 2);
+  const shaft = new THREE.Mesh(new THREE.BoxGeometry(shaftR * 2, shaftR * 1.2, shaftLen), mat);
+  g.add(shaft, head);
+  return g;
+}
+
 export class Race {
   state: RaceState = "countdown";
   countdown = 3;
@@ -27,6 +40,9 @@ export class Race {
   private ai: AIState = newAI();
   private marker: THREE.Mesh;
   private marker2: THREE.Mesh;
+  private arrow: THREE.Group;      // inside the next checkpoint, points to the one after
+  private arrow2: THREE.Group;     // inside the checkpoint after that
+  private guide: THREE.Group;      // floats over the player, points at the next checkpoint
   private segLen: number[] = [];
   private cum: number[] = [];
   private lastTick = 4;
@@ -70,7 +86,10 @@ export class Race {
     this.marker = new THREE.Mesh(geo, mat);
     this.marker2 = new THREE.Mesh(geo, mat.clone());
     (this.marker2.material as THREE.MeshBasicMaterial).opacity = 0.1;
-    scene.add(this.marker, this.marker2);
+    this.arrow = buildArrow(accent, 1.2, 2.6, 3.6, 0.4, 0.95);
+    this.arrow2 = buildArrow(accent, 1.2, 2.6, 3.6, 0.4, 0.35);
+    this.guide = buildArrow(accent, 0.45, 1.0, 1.3, 0.16, 0.9);
+    scene.add(this.marker, this.marker2, this.arrow, this.arrow2, this.guide);
     this.placeMarkers();
   }
 
@@ -85,7 +104,21 @@ export class Race {
     this.marker2.visible = this.playerIdx + 1 < this.total;
     const finish = this.playerIdx >= this.total - 1;
     (this.marker.material as THREE.MeshBasicMaterial).color.setHex(finish ? 0xffffff : (this.marker2.material as THREE.MeshBasicMaterial).color.getHex());
+    // arrows inside the rings point at the checkpoint that follows
+    this.aimArrow(this.arrow, this.playerIdx, 4.5);
+    this.aimArrow(this.arrow2, this.playerIdx + 1, 4.5);
   }
+
+  private aimArrow(arrow: THREE.Group, idx: number, height: number) {
+    const from = this.checkpoints[idx], to = this.checkpoints[idx + 1];
+    arrow.visible = !!(from && to);
+    if (!from || !to) return;
+    arrow.position.set(from.x, height, from.z);
+    arrow.rotation.y = headingTo(from.x, from.z, to.x, to.z);
+  }
+
+  /** The checkpoints still to hit, next one first, for the minimap route. */
+  get remaining() { return this.checkpoints.slice(this.playerIdx); }
 
   private progress(car: Car, idx: number) {
     if (idx >= this.total) return this.cum[this.total - 1] + this.segLen[this.total - 1];
@@ -103,6 +136,16 @@ export class Race {
   update(dt: number, player: Car, sfx: (e: "tick" | "go" | "checkpoint") => void): void {
     this.marker.rotation.y += dt * 0.5;
     this.marker2.rotation.y -= dt * 0.5;
+    const bob = Math.sin(this.time * 3 + this.countdown) * 0.3;
+    this.arrow.position.y = 4.5 + bob;
+    this.arrow2.position.y = 4.5 - bob;
+    // guide arrow hovers over the player's car and points at the next checkpoint
+    this.guide.visible = this.state !== "finished";
+    if (this.guide.visible) {
+      const cp = this.nextCheckpoint;
+      this.guide.position.set(player.x, player.y + 2.7, player.z);
+      this.guide.rotation.y = headingTo(player.x, player.z, cp.x, cp.z);
+    }
     if (this.state === "countdown") {
       this.countdown -= dt;
       const n = Math.ceil(this.countdown);
@@ -140,6 +183,6 @@ export class Race {
   }
 
   dispose() {
-    this.scene.remove(this.rival.group, this.marker, this.marker2);
+    this.scene.remove(this.rival.group, this.marker, this.marker2, this.arrow, this.arrow2, this.guide);
   }
 }

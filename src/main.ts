@@ -448,7 +448,8 @@ function frame() {
     hud.setRace(race.position(player), race.playerIdx, race.total, race.time, race.def.name);
     hud.setCountdown(race.state === "countdown" ? Math.ceil(race.countdown) : (race.state === "running" && race.time < 0.8 ? 0 : null));
   }
-  hud.drawMinimap({ player, cops: police.cops, rival: race?.rival, checkpoint: race && race.state !== "finished" ? race.nextCheckpoint : undefined }, accent);
+  const racing = race && race.state !== "finished" ? race : null;
+  hud.drawMinimap({ player, cops: police.cops, rival: race?.rival, checkpoint: racing?.nextCheckpoint, route: racing?.remaining }, accent);
   if (showFps) { fpsAcc += dt; fpsN++; if (fpsAcc >= 0.5) { hud.setFps(Math.round(fpsN / fpsAcc)); fpsAcc = 0; fpsN = 0; } }
 
   if (composer) composer.render(); else renderer.render(scene, camera);
@@ -460,7 +461,7 @@ if (AUTOPLAY) {
   started = true; paused = false; menu.show(false);
   setTimeout(() => police.startPursuit(), 1500);
   setTimeout(() => { police.heat = 3; }, 2500);
-  setTimeout(() => startRace(0), 6000);
+  setTimeout(() => startRace(0), params.has("race") ? 300 : 6000);
   window.addEventListener("error", (e) => console.error("AUTOPLAY ERROR", e.message));
 }
 frame();
