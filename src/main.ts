@@ -135,7 +135,7 @@ let crashSfxT = 0;
 let showFps = false;
 let fpsAcc = 0, fpsN = 0;
 let clock = 0;
-let menuAngle = 0;
+let menuAngle = 2.4;
 const nearMissed = new Set<Car>();
 
 const police = new Police(scene, city, smoke, (e) => {

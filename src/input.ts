@@ -20,8 +20,8 @@ export class Input {
 
   /** -1..1 throttle (W/S or arrows). */
   get throttle() { return (this.any("KeyW", "ArrowUp") ? 1 : 0) - (this.any("KeyS", "ArrowDown") ? 1 : 0); }
-  /** -1..1 steer, negative is left. */
-  get steer() { return (this.any("KeyD", "ArrowRight") ? 1 : 0) - (this.any("KeyA", "ArrowLeft") ? 1 : 0); }
+  /** -1..1 steer, positive is left (the physics convention: positive yaw = counter-clockwise from above). */
+  get steer() { return (this.any("KeyA", "ArrowLeft") ? 1 : 0) - (this.any("KeyD", "ArrowRight") ? 1 : 0); }
   get handbrake() { return this.down("Space"); }
   get nitro() { return this.any("ShiftLeft", "ShiftRight"); }
 

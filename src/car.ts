@@ -38,12 +38,13 @@ export const PAINTS = [
 ];
 export const CIVILIAN_COLORS = [0x8a8f96, 0xdfe2e6, 0x2b2f36, 0x6b1f22, 0x24476e, 0x5b6b3a, 0xb7a26b, 0x8c4a2b, 0x3f3f3f];
 
-const GLASS = 0x0d1117;
+const GLASS_TINT = 0x0b0e14;
 const BLACK = 0x111215;
+const CHROME = 0xb9bcc2;
 
-function box(w: number, h: number, d: number, x: number, y: number, z: number, color: number) {
-  const g = new THREE.BoxGeometry(w, h, d);
-  g.translate(x, y, z);
+function tint(src: THREE.BufferGeometry, color: number) {
+  // mergeGeometries needs every part indexed the same way; extrusions are non-indexed, so make everything non-indexed
+  const g = src.index ? src.toNonIndexed() : src;
   const c = new THREE.Color(color);
   const n = g.attributes.position.count;
   const colors = new Float32Array(n * 3);
@@ -52,14 +53,99 @@ function box(w: number, h: number, d: number, x: number, y: number, z: number, c
   return g;
 }
 
-let paintMatCache: THREE.MeshStandardMaterial | null = null;
+function box(w: number, h: number, d: number, x: number, y: number, z: number, color: number) {
+  const g = new THREE.BoxGeometry(w, h, d);
+  g.translate(x, y, z);
+  return tint(g, color);
+}
+
+/** Extrude a side profile (u forward, v up) across the car's width, centred on x = 0. Front ends up at -z. */
+function extrudeProfile(shape: THREE.Shape, width: number, color: number, bevel: number) {
+  const g = new THREE.ExtrudeGeometry(shape, bevel > 0
+    ? { depth: width - bevel * 2, bevelEnabled: true, bevelThickness: bevel, bevelSize: bevel, bevelOffset: -bevel, bevelSegments: 2, curveSegments: 8 }
+    : { depth: width, bevelEnabled: false, curveSegments: 8 });
+  g.rotateY(Math.PI / 2);
+  g.translate(-width / 2 + bevel, 0, 0);
+  g.computeVertexNormals();
+  return tint(g, color);
+}
+
+type Pt = [number, number];
+interface Profile {
+  L: number; W: number; bottom: number; wu: number; // wheel u offset from centre
+  frontTop: Pt; hoodStart: Pt; wsBase: Pt; wsTop: Pt; roofEnd: Pt; rwBase: Pt; trunk: Pt; tailTop: Pt;
+  spoiler?: "lip" | "wing";
+}
+
+const PROFILES: Record<BodyKind, Profile> = {
+  hatch:  { L: 3.9, W: 1.8, bottom: 0.32, wu: 1.25, frontTop: [1.95, 0.62], hoodStart: [1.85, 0.8], wsBase: [0.7, 0.88], wsTop: [0.1, 1.42], roofEnd: [-1.25, 1.42], rwBase: [-1.85, 1.0], trunk: [-1.92, 0.96], tailTop: [-1.95, 0.9] },
+  muscle: { L: 4.9, W: 1.95, bottom: 0.32, wu: 1.475, frontTop: [2.45, 0.62], hoodStart: [2.3, 0.82], wsBase: [0.7, 0.88], wsTop: [0.0, 1.32], roofEnd: [-1.0, 1.32], rwBase: [-1.7, 0.96], trunk: [-2.4, 0.96], tailTop: [-2.45, 0.74], spoiler: "lip" },
+  exotic: { L: 4.5, W: 2.0, bottom: 0.28, wu: 1.35, frontTop: [2.25, 0.42], hoodStart: [2.1, 0.6], wsBase: [0.85, 0.72], wsTop: [-0.1, 1.12], roofEnd: [-0.85, 1.13], rwBase: [-1.45, 0.86], trunk: [-2.2, 0.84], tailTop: [-2.25, 0.56], spoiler: "wing" },
+  sedan:  { L: 4.7, W: 1.9, bottom: 0.32, wu: 1.425, frontTop: [2.35, 0.62], hoodStart: [2.2, 0.84], wsBase: [0.75, 0.9], wsTop: [0.05, 1.4], roofEnd: [-0.95, 1.4], rwBase: [-1.6, 1.0], trunk: [-2.3, 0.98], tailTop: [-2.35, 0.7] },
+};
+
+const WHEEL_R = 0.34;
+const ARCH_R = 0.44;
+
+function bodyShape(p: Profile) {
+  const s = new THREE.Shape();
+  const h = p.L / 2;
+  s.moveTo(-h, p.bottom);
+  s.lineTo(-p.wu - ARCH_R, p.bottom);
+  s.absarc(-p.wu, WHEEL_R, ARCH_R, Math.PI, 0, true);
+  s.lineTo(p.wu - ARCH_R, p.bottom);
+  s.absarc(p.wu, WHEEL_R, ARCH_R, Math.PI, 0, true);
+  s.lineTo(h, p.bottom);
+  s.lineTo(p.frontTop[0], p.frontTop[1]);
+  s.lineTo(p.hoodStart[0], p.hoodStart[1]);
+  s.lineTo(p.wsBase[0], p.wsBase[1]);
+  s.lineTo(p.wsTop[0], p.wsTop[1]);
+  s.lineTo(p.roofEnd[0], p.roofEnd[1]);
+  s.lineTo(p.rwBase[0], p.rwBase[1]);
+  s.lineTo(p.trunk[0], p.trunk[1]);
+  s.lineTo(p.tailTop[0], p.tailTop[1]);
+  s.lineTo(-h, p.bottom);
+  return s;
+}
+
+function glassShape(p: Profile) {
+  const s = new THREE.Shape();
+  s.moveTo(p.wsBase[0] + 0.05, p.wsBase[1] - 0.06);
+  s.lineTo(p.wsTop[0] + 0.03, p.wsTop[1] + 0.02);
+  s.lineTo(p.roofEnd[0] - 0.03, p.roofEnd[1] + 0.02);
+  s.lineTo(p.rwBase[0] - 0.05, p.rwBase[1]);
+  s.lineTo(p.rwBase[0] - 0.05, p.rwBase[1] - 0.3);
+  s.lineTo(p.wsBase[0] + 0.05, p.wsBase[1] - 0.3);
+  return s;
+}
+
+let paintMatCache: THREE.MeshPhysicalMaterial | null = null;
 function paintMaterial() {
-  if (!paintMatCache) paintMatCache = new THREE.MeshStandardMaterial({ vertexColors: true, metalness: 0.55, roughness: 0.32 });
+  if (!paintMatCache) paintMatCache = new THREE.MeshPhysicalMaterial({ vertexColors: true, metalness: 0.45, roughness: 0.38, clearcoat: 0.9, clearcoatRoughness: 0.12 });
   return paintMatCache;
 }
-let wheelGeo: THREE.BufferGeometry | null = null;
+let glassMat: THREE.MeshStandardMaterial | null = null;
 let wheelMat: THREE.MeshStandardMaterial | null = null;
 let headMat: THREE.MeshStandardMaterial | null = null;
+let wheelGeoCache: THREE.BufferGeometry | null = null;
+
+function wheelGeometry() {
+  if (!wheelGeoCache) {
+    const tire = tint(new THREE.CylinderGeometry(WHEEL_R, WHEEL_R, 0.26, 18), 0x15161a);
+    const rim = tint(new THREE.CylinderGeometry(0.24, 0.24, 0.28, 12), CHROME);
+    const hub = tint(new THREE.CylinderGeometry(0.07, 0.07, 0.3, 8), 0x2a2c30);
+    const spokes: THREE.BufferGeometry[] = [];
+    for (let i = 0; i < 5; i++) {
+      const sp = tint(new THREE.BoxGeometry(0.05, 0.36, 0.31), 0x2a2c30);
+      sp.rotateY((i / 5) * Math.PI * 2);
+      spokes.push(sp);
+    }
+    // the spokes are dark grooves in the chrome disc, read as a rim pattern from any distance
+    wheelGeoCache = mergeGeometries([tire, rim, hub, ...spokes]);
+    wheelGeoCache.rotateZ(Math.PI / 2);
+  }
+  return wheelGeoCache;
+}
 
 export interface CarMesh {
   group: THREE.Group;
@@ -70,47 +156,50 @@ export interface CarMesh {
 }
 
 export function wheelbaseFor(kind: BodyKind) {
-  return kind === "hatch" ? 2.5 : kind === "muscle" ? 2.95 : kind === "exotic" ? 2.7 : 2.85;
+  return PROFILES[kind].wu * 2;
 }
 
 export function buildCarMesh(kind: BodyKind, paint: number, opts: { police?: boolean; animatedWheels?: boolean } = {}): CarMesh {
+  const p = PROFILES[kind];
+  const { L, W } = p;
+  const h = L / 2;
+  const belt = p.wsBase[1];
+  const roofY = (p.wsTop[1] + p.roofEnd[1]) / 2;
   const parts: THREE.BufferGeometry[] = [];
-  const wb = wheelbaseFor(kind);
-  // front is -z
-  if (kind === "hatch") {
-    parts.push(box(1.8, 0.5, 3.9, 0, 0.55, 0, paint));
-    parts.push(box(1.65, 0.5, 2.2, 0, 1.03, 0.25, GLASS));
-    parts.push(box(1.7, 0.1, 2.3, 0, 1.3, 0.25, paint));
-    parts.push(box(1.84, 0.2, 0.3, 0, 0.42, -1.95, BLACK));
-    parts.push(box(1.84, 0.2, 0.3, 0, 0.42, 1.95, BLACK));
-  } else if (kind === "muscle") {
-    parts.push(box(1.95, 0.52, 4.9, 0, 0.56, 0, paint));
-    parts.push(box(0.9, 0.12, 1.6, 0, 0.86, -1.3, paint));
-    parts.push(box(1.7, 0.48, 2.0, 0, 1.06, 0.4, GLASS));
-    parts.push(box(1.74, 0.08, 1.9, 0, 1.33, 0.4, paint));
-    parts.push(box(1.98, 0.22, 0.3, 0, 0.42, -2.45, BLACK));
-    parts.push(box(1.98, 0.22, 0.3, 0, 0.42, 2.45, BLACK));
-  } else if (kind === "exotic") {
-    parts.push(box(2.0, 0.4, 4.5, 0, 0.5, 0, paint));
-    parts.push(box(1.9, 0.18, 1.4, 0, 0.78, -1.5, paint));
-    parts.push(box(1.6, 0.42, 1.9, 0, 0.9, 0.15, GLASS));
-    parts.push(box(1.7, 0.08, 1.2, 0, 1.14, 0.5, paint));
-    parts.push(box(1.9, 0.06, 0.4, 0, 1.15, 2.0, BLACK));
-    parts.push(box(0.08, 0.4, 0.3, -0.7, 0.92, 2.0, BLACK));
-    parts.push(box(0.08, 0.4, 0.3, 0.7, 0.92, 2.0, BLACK));
-    parts.push(box(2.02, 0.18, 0.3, 0, 0.38, -2.25, BLACK));
-  } else {
-    // sedan (police / traffic)
-    parts.push(box(1.9, 0.52, 4.7, 0, 0.56, 0, paint));
-    parts.push(box(1.7, 0.52, 2.1, 0, 1.06, 0.2, GLASS));
-    parts.push(box(1.74, 0.08, 2.0, 0, 1.36, 0.2, opts.police ? BLACK : paint));
-    parts.push(box(1.94, 0.22, 0.3, 0, 0.42, -2.35, BLACK));
-    parts.push(box(1.94, 0.22, 0.3, 0, 0.42, 2.35, BLACK));
-    if (opts.police) {
-      parts.push(box(1.92, 0.54, 1.5, 0, 0.56, -1.6, BLACK));
-      parts.push(box(1.92, 0.54, 1.2, 0, 0.56, 1.75, BLACK));
-      parts.push(box(1.2, 0.12, 0.34, 0, 1.46, -0.1, BLACK));
-    }
+
+  // body shell with wheel arches, chassis filler behind the arches
+  parts.push(extrudeProfile(bodyShape(p), W, paint, 0.05));
+  parts.push(box(W - 0.5, 0.4, L - 0.4, 0, p.bottom + 0.1, 0, BLACK));
+  // roof panel over the glasshouse, pillars between the side windows
+  const roofLen = p.wsTop[0] - p.roofEnd[0];
+  parts.push(box(W - 0.2, 0.06, roofLen - 0.06, 0, roofY + 0.02, -(p.wsTop[0] + p.roofEnd[0]) / 2, opts.police ? BLACK : paint));
+  const winH = roofY - belt - 0.16;
+  const winFront = p.wsBase[0] - 0.45, winRear = p.rwBase[0] + 0.12;
+  const winMid = -(winFront + winRear) / 2;
+  parts.push(box(W + 0.04, winH + 0.02, 0.07, 0, belt + 0.1 + winH / 2, winMid + 0.05, paint));
+  // mirrors, bumpers, grille, plate, exhaust
+  const mz = -(p.wsBase[0] - 0.12);
+  parts.push(box(0.1, 0.09, 0.2, -(W / 2 + 0.08), belt + 0.12, mz, paint));
+  parts.push(box(0.1, 0.09, 0.2, W / 2 + 0.08, belt + 0.12, mz, paint));
+  parts.push(box(W + 0.02, 0.14, 0.24, 0, p.bottom + 0.06, -(h - 0.08), BLACK));
+  parts.push(box(W + 0.02, 0.14, 0.24, 0, p.bottom + 0.06, h - 0.08, BLACK));
+  parts.push(box(W * 0.42, 0.14, 0.05, 0, (p.bottom + p.frontTop[1]) / 2 + 0.05, -h - 0.01, BLACK));
+  parts.push(box(0.42, 0.13, 0.03, 0, p.tailTop[1] - 0.36, h + 0.01, 0xe8e8e0));
+  parts.push(tint(new THREE.CylinderGeometry(0.045, 0.045, 0.16, 8).rotateX(Math.PI / 2).translate(-0.5, p.bottom - 0.02, h + 0.04), 0x3a3c40));
+  if (kind !== "hatch") parts.push(tint(new THREE.CylinderGeometry(0.045, 0.045, 0.16, 8).rotateX(Math.PI / 2).translate(0.5, p.bottom - 0.02, h + 0.04), 0x3a3c40));
+  if (kind === "muscle") parts.push(box(0.9, 0.12, 1.3, 0, p.hoodStart[1] + 0.03, -(p.hoodStart[0] - 0.85), paint)); // hood scoop
+  if (p.spoiler === "lip") parts.push(box(W - 0.3, 0.05, 0.28, 0, p.trunk[1] + 0.04, -(p.trunk[0] + 0.1), paint));
+  if (p.spoiler === "wing") {
+    parts.push(box(W - 0.1, 0.05, 0.4, 0, p.trunk[1] + 0.34, -(p.trunk[0] + 0.05), BLACK));
+    parts.push(box(0.07, 0.34, 0.26, -0.7, p.trunk[1] + 0.16, -(p.trunk[0] + 0.05), BLACK));
+    parts.push(box(0.07, 0.34, 0.26, 0.7, p.trunk[1] + 0.16, -(p.trunk[0] + 0.05), BLACK));
+  }
+  if (opts.police) {
+    // black and white livery: black doors and hood stripe, blue beltline stripe
+    parts.push(box(W + 0.02, belt - p.bottom - 0.18, 1.6, 0, (belt + p.bottom) / 2 - 0.02, 0.1, BLACK));
+    parts.push(box(W + 0.03, 0.05, L * 0.62, 0, belt - 0.02, 0.15, 0x1a3fbf));
+    parts.push(box(0.6, 0.03, p.hoodStart[0] - p.wsBase[0] - 0.2, 0, (p.hoodStart[1] + p.wsBase[1]) / 2 + 0.02, -(p.hoodStart[0] + p.wsBase[0]) / 2, BLACK));
+    parts.push(box(1.3, 0.14, 0.36, 0, roofY + 0.12, -(p.wsTop[0] + p.roofEnd[0]) / 2 + 0.1, BLACK));
   }
   const body = new THREE.Mesh(mergeGeometries(parts), paintMaterial());
   body.castShadow = true;
@@ -118,45 +207,53 @@ export function buildCarMesh(kind: BodyKind, paint: number, opts: { police?: boo
   const group = new THREE.Group();
   group.add(body);
 
+  // glass: windshield + rear window + roof extrusion, and side window band
+  if (!glassMat) glassMat = new THREE.MeshStandardMaterial({ color: GLASS_TINT, roughness: 0.08, metalness: 0.9 });
+  const glassParts: THREE.BufferGeometry[] = [extrudeProfile(glassShape(p), W - 0.26, GLASS_TINT, 0)];
+  glassParts.push(box(W + 0.02, winH, winFront - winRear, 0, belt + 0.1 + winH / 2, winMid, GLASS_TINT));
+  const glass = new THREE.Mesh(mergeGeometries(glassParts), glassMat);
+  group.add(glass);
+
   // lights
   if (!headMat) headMat = new THREE.MeshStandardMaterial({ color: 0xffffff, emissive: 0xfff2d0, emissiveIntensity: 2.2 });
-  const frontZ = kind === "muscle" ? -2.46 : kind === "hatch" ? -1.96 : kind === "exotic" ? -2.26 : -2.36;
-  const rearZ = -frontZ;
-  const hw = kind === "exotic" ? 0.72 : 0.66;
-  const head = new THREE.Mesh(mergeGeometries([box(0.42, 0.16, 0.06, -hw, 0.66, frontZ, 0xffffff), box(0.42, 0.16, 0.06, hw, 0.66, frontZ, 0xffffff)]), headMat);
+  const hw = W / 2 - 0.32;
+  const hy = p.frontTop[1] + 0.06, hz = -(p.frontTop[0] - 0.02);
+  const head = new THREE.Mesh(mergeGeometries([box(0.42, 0.14, 0.1, -hw, hy, hz, 0xffffff), box(0.42, 0.14, 0.1, hw, hy, hz, 0xffffff)]), headMat);
   group.add(head);
   const tail = new THREE.MeshStandardMaterial({ color: 0x550000, emissive: 0xff2010, emissiveIntensity: 0.8 });
-  const tailMesh = new THREE.Mesh(mergeGeometries([box(0.5, 0.14, 0.06, -hw, 0.66, rearZ, 0xffffff), box(0.5, 0.14, 0.06, hw, 0.66, rearZ, 0xffffff)]), tail);
+  const ty = p.tailTop[1] - 0.12;
+  const tailMesh = new THREE.Mesh(mergeGeometries([box(0.5, 0.12, 0.06, -hw, ty, h + 0.01, 0xffffff), box(0.5, 0.12, 0.06, hw, ty, h + 0.01, 0xffffff)]), tail);
   group.add(tailMesh);
 
   let lightbar: CarMesh["lightbar"];
   if (opts.police) {
     const red = new THREE.MeshStandardMaterial({ color: 0x330000, emissive: 0xff1a1a, emissiveIntensity: 0.3 });
     const blue = new THREE.MeshStandardMaterial({ color: 0x000033, emissive: 0x2a5cff, emissiveIntensity: 0.3 });
-    const rm = new THREE.Mesh(new THREE.BoxGeometry(0.5, 0.16, 0.3), red); rm.position.set(-0.32, 1.6, -0.1);
-    const bm = new THREE.Mesh(new THREE.BoxGeometry(0.5, 0.16, 0.3), blue); bm.position.set(0.32, 1.6, -0.1);
+    const lz = -(p.wsTop[0] + p.roofEnd[0]) / 2 + 0.1;
+    const rm = new THREE.Mesh(new THREE.BoxGeometry(0.55, 0.16, 0.3), red); rm.position.set(-0.34, roofY + 0.24, lz);
+    const bm = new THREE.Mesh(new THREE.BoxGeometry(0.55, 0.16, 0.3), blue); bm.position.set(0.34, roofY + 0.24, lz);
     group.add(rm, bm);
     lightbar = { red, blue };
   }
 
   // wheels
-  if (!wheelGeo) { wheelGeo = new THREE.CylinderGeometry(0.34, 0.34, 0.26, 14); wheelGeo.rotateZ(Math.PI / 2); }
-  if (!wheelMat) wheelMat = new THREE.MeshStandardMaterial({ color: 0x15161a, roughness: 0.9, metalness: 0.2 });
-  const track = kind === "exotic" || kind === "muscle" ? 0.9 : 0.82;
-  const wheelPos = [[-track, -wb / 2], [track, -wb / 2], [-track, wb / 2], [track, wb / 2]];
+  if (!wheelMat) wheelMat = new THREE.MeshStandardMaterial({ vertexColors: true, roughness: 0.55, metalness: 0.6 });
+  const wg = wheelGeometry();
+  const track = W / 2 - 0.1;
+  const wheelPos = [[-track, -p.wu], [track, -p.wu], [-track, p.wu], [track, p.wu]];
   const wheels: THREE.Mesh[] = [];
   const frontWheels: THREE.Mesh[] = [];
   if (opts.animatedWheels) {
     wheelPos.forEach(([x, z], i) => {
-      const w = new THREE.Mesh(wheelGeo!, wheelMat!);
-      w.position.set(x, 0.34, z);
+      const w = new THREE.Mesh(wg, wheelMat!);
+      w.position.set(x, WHEEL_R, z);
       w.castShadow = true;
       group.add(w);
       wheels.push(w);
       if (i < 2) frontWheels.push(w);
     });
   } else {
-    const gs = wheelPos.map(([x, z]) => { const g = wheelGeo!.clone(); g.translate(x, 0.34, z); return g; });
+    const gs = wheelPos.map(([x, z]) => { const g = wg.clone(); g.translate(x, WHEEL_R, z); return g; });
     const wm = new THREE.Mesh(mergeGeometries(gs), wheelMat);
     wm.castShadow = true;
     group.add(wm);
