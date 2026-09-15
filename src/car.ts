@@ -397,6 +397,7 @@ export function buildCarMesh(kind: BodyKind, paint: number, opts: { police?: boo
     wheelPos.forEach(([x, z], i) => {
       const w = new THREE.Mesh(wg, wheelMat!);
       w.position.set(x, body.wheelR, z);
+      w.rotation.order = "YXZ"; // steer (Y) first, then spin around the steered axle (X)
       w.castShadow = true;
       group.add(w);
       wheels.push(w);
