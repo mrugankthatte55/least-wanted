@@ -5,7 +5,7 @@ import { RenderPass } from "three/addons/postprocessing/RenderPass.js";
 import { UnrealBloomPass } from "three/addons/postprocessing/UnrealBloomPass.js";
 import { OutputPass } from "three/addons/postprocessing/OutputPass.js";
 import { buildCity } from "./city";
-import { Car, PLAYER_CARS, PAINTS, collideCarBox, collideCars } from "./car";
+import { Car, PLAYER_CARS, PAINTS, collideCarBox, collideCars, buildCarMesh, BodyKind } from "./car";
 import { Input } from "./input";
 import { Police } from "./police";
 import { Traffic } from "./traffic";
@@ -19,7 +19,8 @@ import { loadSettings, loadCareer, saveCareer, Settings, currentColorway, accent
 type Quality = "high" | "medium" | "low";
 const params = new URLSearchParams(location.search);
 const gfxParam = params.get("gfx") as Quality | null;
-const AUTOPLAY = params.has("autoplay"); // dev: drive itself and force a pursuit, for headless smoke tests
+const AUTOPLAY = params.has("autoplay");
+const GARAGE = params.has("garage"); // dev: line up every body style for a look, no menu // dev: drive itself and force a pursuit, for headless smoke tests
 let quality: Quality = gfxParam || (localStorage.getItem("lw.gfx") as Quality) || "high";
 const settings: Settings = loadSettings();
 const career = loadCareer();
@@ -340,7 +341,11 @@ function frame() {
   clock += dt;
   const accent = accentCss();
 
-  if (paused) {
+  if (GARAGE) {
+    camera.position.set(player.x + 1.5, 2.6, player.z + 8.5);
+    camera.lookAt(player.x, 0.7, player.z - 0.5);
+    camera.fov = 55; camera.updateProjectionMatrix();
+  } else if (paused) {
     updateMenuCamera(dt);
     traffic.update(dt, player, []);
     smoke.update(dt);
@@ -457,6 +462,18 @@ function frame() {
 }
 
 menu.show(true);
+if (GARAGE) {
+  const row: [BodyKind, number, boolean][] = [["hatch", PAINTS[1].hex, false], ["muscle", PAINTS[2].hex, false], ["exotic", PAINTS[4].hex, false], ["sedan", 0xf2f2f2, true]];
+  row.forEach(([k, c, police], i) => {
+    const m = buildCarMesh(k, c, { police });
+    m.group.position.set(player.x - 5.5 + i * 3.6, 0, player.z - i * 0.4);
+    m.group.rotation.y = params.get("garage") === "rear" ? 0.75 : Math.PI - 0.75;
+    scene.add(m.group);
+  });
+  scene.remove(player.group);
+  menu.show(false);
+  document.querySelector("#hud")!.classList.add("hidden");
+}
 if (AUTOPLAY) {
   started = true; paused = false; menu.show(false);
   setTimeout(() => police.startPursuit(), 1500);
